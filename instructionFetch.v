@@ -4,7 +4,9 @@ module instructionFetch (
     input i_write_enable,
     input [2:0] i_load_address,
     input [31:0] i_load_instruction,
-    input i_flush
+    input i_flush,
+    output o_data_ready,
+    output [31:0] o_instruction
 );
 // start with program memory
 
@@ -243,12 +245,14 @@ always @(posedge clk or negedge rst) begin
                 r_if_reg_occupied <= 1'b0;
             end
             STORE: begin //make flush a handshake signal
-                r_if_reg_occupied <= 1'b1; // signal to the decoder
+                r_if_reg_occupied <= 1'b1; // signal to the decoder that data is ready
                 r_if_reg <= r_if_next_val;
             end
         endcase
     end
 end
 
+assign o_data_ready = r_if_reg_occupied;
+assign o_instruction = r_if_reg;
 // CURRENT PROBLEM -> if flush occurs while fetch is in fetch state, not good because
 endmodule
