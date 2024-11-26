@@ -4,10 +4,35 @@ module instructionDecoder(
     input i_flush, //external flush input
     input [31:0] i_instruction, // 32-bit i_instruction input
     input i_if_ready,
-    output o_flush //internal flush output
-);
+    output o_flush, //internal flush output
+    output [31:0] o_operand1,
+    output [31:0] o_operand2,
+    output [4:0] o_ALUop
+); // have to make external connection to regfile will do tomorrow
 
 // ID LOGIC //
+
+localparam ADD  = 4'b0000;
+localparam SUB  = 4'b0001;
+localparam XOR  = 4'b0010;
+localparam OR   = 4'b0011;
+localparam AND  = 4'b0100;
+localparam SLL  = 4'b0101;
+localparam SRL  = 4'b0110;
+localparam SRA  = 4'b0111;
+localparam SLT  = 4'b1000;
+localparam SLTU = 4'b1001;
+
+localparam ADDI  = 4'b1010;  // Add immediate
+localparam XORI  = 4'b1011;  // XOR immediate
+localparam ORI   = 4'b1100;  // OR immediate
+localparam ANDI  = 4'b1101;  // AND immediate
+localparam SLLI  = 4'b1110;  // Shift left logical immediate
+localparam SRLI  = 4'b1111;  // Shift right logical immediate
+localparam SRAI  = 4'b10000; // Shift right arithmetic immediate
+localparam SLTI  = 4'b10001; // Set less than immediate
+localparam SLTIU = 4'b10010; // Set less than immediate unsigned
+
 reg [31:0] r_id_reg; //hold the instruction
 reg r_id_ready = 0;
 reg r_decode_fin = 0;
@@ -73,7 +98,7 @@ always @(*) begin
         end
 
         STORE: begin
-            if (r_decode_fin_delay <= 2'b01) next_id_state = FLUSH;
+            if (r_decode_fin_delay == 2'b01) next_id_state = FLUSH;
         end
 
         FLUSH: begin
@@ -81,6 +106,31 @@ always @(*) begin
         end
     endcase
 end
+
+wire [4:0] w_addr1;
+wire [4:0] w_addr2;
+wire [31:0] w_operand1;
+wire[31:0] w_operand2;
+
+reg [31:0] r_operand1;
+reg [31:0] r_operand2;
+reg [4:0] r_ALUop;
+
+reg [31:0] r_idex_operand1;
+reg [31:0] r_idex_operand2;
+reg [4:0] r_idex_ALUop;
+
+registerFile rf (
+    .clk(clk_wire),
+    .rst(rst_wire),
+    .i_reg_read_addr1(w_addr1),
+    .i_reg_read_addr2(w_addr2),
+    .o_reg_read_data1(w_operand1),
+    .o_reg_read_data2(w_operand2)
+);
+
+assign w_addr1 = rs1;
+assign w_addr2 = rs2;
 
 always @(posedge clk or negedge rst) begin 
     if (!rst) begin
@@ -110,13 +160,20 @@ always @(posedge clk or negedge rst) begin
     end
 end
 
+always @(posedge clk or negedge rst) begin
+    if (!rst) begin
+        r_idex_reg_occupied_pulse <= 1'b0;
+    end else begin
+        r_idex_reg_occupied_pulse <= r_decoded_ins_ready && !r_idex_reg_occupied;
+    end
+end
 //decoder logic
-parameter IDLE_DEC = 2'b00, 
-          DECODE = 2'b01,
-          PASS = 2'b10,
-          DECODE_FIN = 2'b11;
+parameter IDLE_DEC = 3'b00, 
+          SPLIT = 3'b01,
+          DECODE = 3'b010,
+          PASS = 3'b011;
 
-reg [1:0] curr_dec_state, next_dec_state;
+reg [2:0] curr_dec_state, next_dec_state;
 
 always @(posedge clk or negedge rst) begin
     if (!rst) begin
@@ -126,38 +183,33 @@ always @(posedge clk or negedge rst) begin
     end
 end
 
-always @(posedge clk or negedge rst) begin
-    if (!rst) begin
-        r_idex_reg_occupied_pulse <= 1'b0;
-    end else begin
-        r_idex_reg_occupied_pulse <= r_decoded_ins_ready && !r_idex_reg_occupied;
-    end
-end
-
 always @(*) begin
     next_dec_state = curr_dec_state;
     case (curr_dec_state)
         IDLE_DEC: begin
-           if (r_id_ready_delay == 2'b01) next_dec_state = DECODE;
+           if (r_id_ready_delay == 2'b01) next_dec_state = SPLIT;
+        end
+
+        SPLIT: begin
+            // decode in one clk cycle
+            // instead of next clk cylce might have to do more register handshaking
+            next_dec_state = DECODE;
         end
 
         DECODE: begin
-            // decode in one clk cycle
-            // instead of next clk cylce might have to do more register handshaking
-            if (r_idex_reg_occupied_pulse) begin
+            if (r_idex_reg_occupied_pulse) 
                 next_dec_state = PASS;
-            end
-            else begin
+            else
                 next_dec_state = DECODE; // Stay in FETCH if condition not met
-            end
+
         end
-        
+
         PASS: begin
-            next_dec_state = DECODE_FIN;
-        end
-        DECODE_FIN: begin
+            // next state idle_dec
+            // PASS will hold the values
             next_dec_state = IDLE_DEC;
         end
+
     endcase
 end
 
@@ -181,7 +233,7 @@ always @(posedge clk or negedge rst) begin
                 rs1    <= r_id_reg[19:15];// rs1 (bits 19:15)
             end
 
-            DECODE: begin
+            SPLIT: begin
                 r_op_code <= r_op_code;
                 funct3 <= funct3;// funct3 (bits 14:12)
                 rs1    <= rs1;// rs1 (bits 19:15)
@@ -215,23 +267,102 @@ always @(posedge clk or negedge rst) begin
                     end
 
                 endcase
+            end
 
-                r_decoded_ins_ready <= 1'b1;
+            DECODE: begin
+                case(r_op_code)
+                    7'b0110011: begin
+                        r_operand1 <= w_operand1;
+                        r_operand2 <= w_operand2;
+                        r_decoded_ins_ready <= 1'b1;
+                        case ({funct7, funct3})
+                            {7'b0000000, 3'b000}: r_ALUop = ADD;  // ADD
+                            {7'b0100000, 3'b000}: r_ALUop = SUB;  // SUB
+                            {7'b0000000, 3'b100}: r_ALUop = XOR;  // XOR
+                            {7'b0000000, 3'b110}: r_ALUop = OR;   // OR
+                            {7'b0000000, 3'b111}: r_ALUop = AND;  // AND
+                            {7'b0000000, 3'b001}: r_ALUop = SLL;  // SLL
+                            {7'b0000000, 3'b101}: r_ALUop = SRL;  // SRL
+                            {7'b0100000, 3'b101}: r_ALUop = SRA;  // SRA
+                            {7'b0000000, 3'b010}: r_ALUop = SLT;  // SLT
+                            {7'b0000000, 3'b011}: r_ALUop = SLTU; // SLTU
+                            default: r_ALUop = 4'b1111;
+                        endcase
+                    end
+
+                    7'b0010011: begin //i-type
+                        r_operand2 <= imm;
+                        r_operand1 <= w_operand1;
+                        r_decoded_ins_ready <= 1'b1;
+                        case(funct3)
+                                3'b000: r_ALUop = ADDI;  // ADDI (addition with immediate)
+                                3'b100: r_ALUop = XORI;  // XORI (XOR with immediate)
+                                3'b110: r_ALUop = ORI;   // ORI (OR with immediate)
+                                3'b111: r_ALUop = ANDI;  // ANDI (AND with immediate)
+                                3'b001: r_ALUop = SLLI;  // SLLI (shift left logical immediate)
+                                3'b101: begin
+                                    case (funct7[6:1])    // Using funct7[6:1] to distinguish SRLI/SRAI
+                                        6'b000000: r_ALUop = SRLI;  // SRLI (shift right logical immediate)
+                                        6'b010000: r_ALUop = SRAI;  // SRAI (shift right arithmetic immediate)
+                                        default: r_ALUop = 4'b1111; // Undefined operation
+                                    endcase
+                                end
+                                3'b010: r_ALUop = SLTI;  // SLTI (set less than immediate)
+                                3'b011: r_ALUop = SLTIU; // SLTIU (set less than immediate unsigned)
+                                default: r_ALUop = 4'b1111; // Undefined operation
+                        endcase
+                    end
+                endcase
             end
 
             PASS: begin
                 //pass the values to ID/EX pipeline by holding these values until
-                r_ex_hold_op_code <= r_op_code;
-                ex_hold_funct3 <= funct3;// funct3 (bits 14:12)
-                ex_hold_rs1    <= rs1;// rs1 (bits 19:15)
-                ex_hold_rd     <= rd;
-                ex_hold_rs2 <= rs2;
-                ex_hold_funct7 <= funct7;
-                ex_hold_imm <= imm;
-            end
-            DECODE_FIN: begin
-                r_decoded_ins_ready <= 1'b0;
+                r_idex_ALUop <= r_ALUop;
+                r_idex_operand1 <= r_operand1;
+                r_idex_operand2 <= r_operand2;
                 r_decode_fin <= 1'b1;
+            end
+        endcase
+    end
+end
+
+// IDEX //
+parameter IDLE_IDEX = 2'b00, 
+          STORE_IDEX = 2'b01;
+
+reg [1:0] curr_idex_state, next_idex_state;
+
+always @(posedge clk or negedge rst) begin
+    if (!rst) curr_idex_state <= IDLE_IDEX;
+    else curr_idex_state <= next_idex_state;
+end
+
+always @(*) begin
+    next_idex_state = curr_idex_state;
+    case (curr_idex_state)
+        IDLE_IDEX: begin
+            if (r_decoded_ins_ready == 1'b1) next_idex_state = STORE_IDEX; //limit to 8 later
+        end
+
+        STORE_IDEX: begin
+            if (i_flush == 1'b1) next_idex_state = IDLE_IDEX; //if ID in decoder module raises high signal
+            // hold onto r_if_reg value til then
+            // flush coming all the way from controlUnit
+        end
+    endcase
+end
+
+always @(posedge clk or negedge rst) begin 
+    if (!rst) begin
+        r_idex_reg_occupied <= 1'b0;
+    end else begin
+        case (curr_idex_state)
+            IDLE_IDEX: begin
+                r_idex_reg_occupied <= 1'b0;
+            end
+            STORE_IDEX: begin //make flush a handshake signal
+                r_idex_reg_occupied <= 1'b1; // signal to the decoder that data is ready
+                r_decoded_ins_ready <= 0;
             end
         endcase
     end
@@ -245,51 +376,6 @@ end
 // ex_hold_imm
 
 // ID/EX PIPELINE LOGIC //
-parameter IDLE_ID_EX = 2'b00, 
-          STORE_ID_EX = 2'b01;
-
-reg [1:0] curr_idex_state, next_idex_state;
-
-always @(posedge clk or negedge rst) begin
-    if (!rst) curr_idex_state <= IDLE_ID_EX;
-    else curr_idex_state <= next_idex_state;
-end
-
-always @(*) begin
-    next_idex_state = curr_idex_state;
-    case (curr_idex_state)
-        IDLE_ID_EX: begin
-            if (r_decoded_ins_ready == 1'b1) next_idex_state = STORE_ID_EX; //limit to 8 later
-        end
-
-        STORE_ID_EX: begin
-            if (i_flush == 1'b1) next_idex_state = IDLE_ID_EX; //if ID in decoder module raises high signal
-            // hold onto r_if_reg value til then
-        end
-    endcase
-end
-
-always @(posedge clk or negedge rst) begin 
-    if (!rst) begin
-        r_idex_reg_occupied <= 1'b0;
-    end else begin
-        case (curr_idex_state)
-            IDLE_ID_EX: begin
-                r_idex_reg_occupied <= 1'b0;
-            end
-            STORE_ID_EX: begin //make flush a handshake signal
-                r_idex_reg_occupied <= 1'b1; // signal to the decoder that data is ready
-                r_ex_op_code <= r_ex_hold_op_code;
-                ex_funct3 <= ex_hold_funct3;// funct3 (bits 14:12)
-                ex_rs1    <= ex_hold_rs1;// rs1 (bits 19:15)
-                ex_rd     <= ex_hold_rd;
-                ex_rs2 <= ex_hold_rs2;
-                ex_funct7 <= ex_hold_funct7;
-                ex_imm = ex_hold_imm;
-            end
-        endcase
-    end
-end
 
 //r_ex_hold_op_code
 // ex_hold_rd
@@ -300,4 +386,7 @@ end
 // ex_hold_imm
 
 assign o_flush = r_flush_sig;
+assign o_operand1 = r_operand1;
+assign o_operand2 = r_operand2;
+assign o_ALUop = r_ALUop;
 endmodule
