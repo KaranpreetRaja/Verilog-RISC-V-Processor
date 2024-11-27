@@ -19,7 +19,9 @@ reg [31:0] pipeBuffer_readData; // Pipelining output placeholder
 parameter IDLE = 3'b000,
             READ = 3'b001,
             WRITE = 3'b010,
+            PASS = 3'b011;
             ERROR = 3'b100;
+
 
 // State Updates
 always @(posedge clk or posedge rst) begin
