@@ -5,15 +5,13 @@ module instructionLoad (
     input [31:0] i_instruction,
     output o_write_enable,
     output [2:0] o_address,
-    output [31:0] o_instruction,
-	 output o_debug_flag
+    output [31:0] o_instruction
 );
 
 reg [31:0] r_instruction = 32'b0;
 reg r_write_enable = 1'b0;
 reg [1:0] r_data_received = 2'b0;
 reg [2:0] r_address = 3'b000;
-reg r_debug_flag = 0;
 
     // State encoding
 parameter IDLE = 2'b00, 
@@ -72,7 +70,6 @@ always @(posedge clk or negedge rst) begin
 
             RECEIVE: begin
                 r_instruction <= i_instruction;
-					 r_debug_flag <= ~r_debug_flag;
             end
 
             WRITE: begin
@@ -88,5 +85,4 @@ end
 assign o_instruction = r_instruction;
 assign o_write_enable = r_write_enable;
 assign o_address = r_address;
-assign o_debug_flag = r_debug_flag;
 endmodule

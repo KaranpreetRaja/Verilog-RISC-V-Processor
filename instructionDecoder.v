@@ -3,11 +3,20 @@ module instructionDecoder(
     input rst,
     input i_flush, //external flush input
     input [31:0] i_instruction, // 32-bit i_instruction input
+    output [4:0] o_addr1,
+    output [4:0] o_addr2,
     input i_if_ready,
     output o_flush, //internal flush output
     output [31:0] o_operand1,
     output [31:0] o_operand2,
-    output [4:0] o_ALUop
+    output [4:0] o_ALUop,
+    input [31:0] i_reg_read_data1,
+    input [31:0] i_reg_read_data2,
+    output o_dec_ins_ready,
+    output o_mem_read,
+    output o_mem_write,
+    output [4:0] o_rd,
+    output [9:0] o_debug_flag
 ); // have to make external connection to regfile will do tomorrow
 
 // ID LOGIC //
@@ -23,57 +32,76 @@ localparam SRA  = 4'b0111;
 localparam SLT  = 4'b1000;
 localparam SLTU = 4'b1001;
 
-localparam ADDI  = 4'b1010;  // Add immediate
-localparam XORI  = 4'b1011;  // XOR immediate
-localparam ORI   = 4'b1100;  // OR immediate
-localparam ANDI  = 4'b1101;  // AND immediate
-localparam SLLI  = 4'b1110;  // Shift left logical immediate
-localparam SRLI  = 4'b1111;  // Shift right logical immediate
-localparam SRAI  = 4'b10000; // Shift right arithmetic immediate
-localparam SLTI  = 4'b10001; // Set less than immediate
-localparam SLTIU = 4'b10010; // Set less than immediate unsigned
+localparam ADDI  = 5'b1010;  // Add immediate
+localparam XORI  = 5'b1011;  // XOR immediate
+localparam ORI   = 5'b1100;  // OR immediate
+localparam ANDI  = 5'b1101;  // AND immediate
+localparam SLLI  = 5'b1110;  // Shift left logical immediate
+localparam SRLI  = 5'b1111;  // Shift right logical immediate
+localparam SRAI  = 5'b10000; // Shift right arithmetic immediate
+localparam SLTI  = 5'b10001; // Set less than immediate
+localparam SLTIU = 5'b10010; // Set less than immediate unsigned
+localparam SW = 5'b10100; //STORE
 
-reg [31:0] r_id_reg; //hold the instruction
+reg [31:0] r_id_reg = 0; //hold the instruction
 reg r_id_ready = 0;
-reg r_decode_fin = 0;
+wire r_decode_fin;
 reg r_flush_sig = 0;
 reg [1:0] r_decode_fin_delay = 2'b0;
 reg [1:0] r_if_ready_delay = 2'b0;
 reg [1:0] r_id_ready_delay = 2'b0;
 reg r_fin_flag = 0;
-reg r_decoded_ins_ready = 0;
-reg [6:0] r_op_code;
-reg [4:0] rd;        // Destination register (bits 11:7, for R/I-type)
-reg [2:0] funct3;    // Function3 field (bits 14:12)
-reg [4:0] rs1;       // Source register 1 (bits 19:15)
-reg [4:0] rs2;       // Source register 2 (bits 24:20, for R/S-type)
-reg [6:0] funct7;    // Function7 field (bits 31:25, for R-type)
-reg [11:0] imm;       // Immediate value (12 bits, for I/S-type)
-reg r_idex_reg_occupied;
-reg r_idex_reg_occupied_pulse;
+wire r_decoded_ins_ready;
+reg [6:0] r_op_code = 0;
+reg [4:0] rd = 0;        // Destination register (bits 11:7, for R/I-type)
+reg [2:0] funct3 = 0;    // Function3 field (bits 14:12)
+reg [4:0] rs1 = 0;       // Source register 1 (bits 19:15)
+reg [4:0] rs2 = 0;       // Source register 2 (bits 24:20, for R/S-type)
+reg [6:0] funct7 = 0;    // Function7 field (bits 31:25, for R-type)
+reg [11:0] imm = 0;       // Immediate value (12 bits, for I/S-type)
+reg r_idex_reg_occupied = 0;
+reg r_idex_reg_occupied_pulse = 0;
 //ex
-reg [6:0] r_ex_op_code;
-reg [4:0] ex_rd;        // Destination register (bits 11:7, for R/I-type)
-reg [2:0] ex_funct3;    // Function3 field (bits 14:12)
-reg [4:0] ex_rs1;       // Source register 1 (bits 19:15)
-reg [4:0] ex_rs2;       // Source register 2 (bits 24:20, for R/S-type)
-reg [6:0] ex_funct7;    // Function7 field (bits 31:25, for R-type)
-reg [11:0] ex_imm;       // Immediate value (12 bits, for I/S-type)
-
+reg [6:0] r_ex_op_code = 0;
+reg [4:0] ex_rd = 0;        // Destination register (bits 11:7, for R/I-type)
+reg [2:0] ex_funct3 = 0;    // Function3 field (bits 14:12)
+reg [4:0] ex_rs1 = 0;       // Source register 1 (bits 19:15)
+reg [4:0] ex_rs2 = 0;       // Source register 2 (bits 24:20, for R/S-type)
+reg [6:0] ex_funct7 = 0;    // Function7 field (bits 31:25, for R-type)
+reg [11:0] ex_imm = 0;       // Immediate value (12 bits, for I/S-type)
+reg r_mem_read = 0;
+reg r_mem_write = 0;
+reg r_idex_mem_read = 0;
+reg r_idex_mem_write = 0;
+reg [4:0] r_idex_rd = 0;
 // hold
-reg [6:0] r_ex_hold_op_code;
-reg [4:0] ex_hold_rd;        // Destination register (bits 11:7, for R/I-type)
-reg [2:0] ex_hold_funct3;    // Function3 field (bits 14:12)
-reg [4:0] ex_hold_rs1;       // Source register 1 (bits 19:15)
-reg [4:0] ex_hold_rs2;       // Source register 2 (bits 24:20, for R/S-type)
-reg [6:0] ex_hold_funct7;    // Function7 field (bits 31:25, for R-type)
-reg [11:0] ex_hold_imm;       // Immediate value (12 bits, for I/S-type)
-reg DEBUG_FLAG = 0;
+reg [6:0] r_ex_hold_op_code = 0;
+reg [4:0] ex_hold_rd = 0;        // Destination register (bits 11:7, for R/I-type)
+reg [2:0] ex_hold_funct3 = 0;    // Function3 field (bits 14:12)
+reg [4:0] ex_hold_rs1 = 0;       // Source register 1 (bits 19:15)
+reg [4:0] ex_hold_rs2 = 0;       // Source register 2 (bits 24:20, for R/S-type)
+reg [6:0] ex_hold_funct7 = 0;    // Function7 field (bits 31:25, for R-type)
+reg [11:0] ex_hold_imm = 0;       // Immediate value (12 bits, for I/S-type)
+reg [9:0] DEBUG_FLAG = 9'b0;
+
 parameter IDLE_ID = 2'b00, 
           STORE = 2'b01,
           FLUSH = 2'b10;
 
 reg [1:0] curr_id_state, next_id_state;
+
+always @(posedge clk or negedge rst) begin
+    if (!rst) begin
+        r_flush_sig <= 1'b0;
+    end else begin
+        // Combine all conditions for setting r_flush_sig
+        if (curr_id_state == FLUSH) begin
+            r_flush_sig <= 1'b1;
+        end else begin
+            r_flush_sig <= 1'b0;
+        end
+    end
+end
 
 always @(posedge clk or negedge rst) begin
     if (!rst) curr_id_state <= IDLE_ID;
@@ -120,40 +148,28 @@ reg [31:0] r_idex_operand1;
 reg [31:0] r_idex_operand2;
 reg [4:0] r_idex_ALUop;
 
-registerFile rf (
-    .clk(clk_wire),
-    .rst(rst_wire),
-    .i_reg_read_addr1(w_addr1),
-    .i_reg_read_addr2(w_addr2),
-    .o_reg_read_data1(w_operand1),
-    .o_reg_read_data2(w_operand2)
-);
-
-assign w_addr1 = rs1;
-assign w_addr2 = rs2;
+assign o_addr1 = rs1;
+assign o_addr2 = rs2;
 
 always @(posedge clk or negedge rst) begin 
     if (!rst) begin
         r_id_reg <= 32'b0;
-        r_flush_sig <= 1'b0;
-        r_decode_fin <= 1'b0;
+
     end else begin
         case (curr_id_state)
             IDLE_ID: begin
-                r_flush_sig <= 1'b0; // Clear flush signal
                 r_id_reg <= r_id_reg;
             end
 
             STORE: begin
                 r_id_reg <= i_instruction; // Latch the instruction
                 r_id_ready <= 1'b1;
+
             end
 
             FLUSH: begin
                 r_id_reg <= r_id_reg;
-                r_flush_sig <= 1'b1; // Signal a flush
                 r_id_ready <= 1'b0;
-                r_decode_fin <= 1'b0; // Reset decode finish flag here
                 
             end
         endcase
@@ -182,6 +198,7 @@ always @(posedge clk or negedge rst) begin
         curr_dec_state <= next_dec_state;
     end
 end
+
 
 always @(*) begin
     next_dec_state = curr_dec_state;
@@ -217,14 +234,13 @@ end
 
 always @(posedge clk or negedge rst) begin 
     if (!rst) begin
-        r_id_reg <= 32'b0;
-        r_flush_sig <= 1'b0;
-        r_decode_fin <= 1'b0;
         r_op_code <= 7'b0;
         rd     <= 0;  // Destination register
         rs2    <= 0;// Source register 2
         funct7 <= 0;// funct7
         imm    <= 0;    
+        r_mem_read <= 0;
+        r_mem_write <= 0;
     end else begin
         case (curr_dec_state)
             IDLE_DEC: begin
@@ -260,7 +276,7 @@ always @(posedge clk or negedge rst) begin
                     end
 
                     7'b0100011: begin //s-type
-                        rd     <= 5'b0;               // No destination register for S-type
+                        rd     <= 0;               // No destination register for S-type
                         rs2    <= r_id_reg[24:20];// Source register 2
                         imm    <= {r_id_reg[31:25], r_id_reg[11:7]}; // Immediate value (split)
                         funct7 <= 7'b0;               // No funct7 for S-type
@@ -272,9 +288,10 @@ always @(posedge clk or negedge rst) begin
             DECODE: begin
                 case(r_op_code)
                     7'b0110011: begin
-                        r_operand1 <= w_operand1;
-                        r_operand2 <= w_operand2;
-                        r_decoded_ins_ready <= 1'b1;
+                        r_operand1 <= i_reg_read_data1;
+                        r_operand2 <= i_reg_read_data2;
+                        r_mem_read <= 1'b0;
+                        r_mem_write <= 1'b0;
                         case ({funct7, funct3})
                             {7'b0000000, 3'b000}: r_ALUop = ADD;  // ADD
                             {7'b0100000, 3'b000}: r_ALUop = SUB;  // SUB
@@ -292,8 +309,9 @@ always @(posedge clk or negedge rst) begin
 
                     7'b0010011: begin //i-type
                         r_operand2 <= imm;
-                        r_operand1 <= w_operand1;
-                        r_decoded_ins_ready <= 1'b1;
+                        r_operand1 <= i_reg_read_data1;
+                        r_mem_read <= 1'b0;
+                        r_mem_write <= 1'b0;
                         case(funct3)
                                 3'b000: r_ALUop = ADDI;  // ADDI (addition with immediate)
                                 3'b100: r_ALUop = XORI;  // XORI (XOR with immediate)
@@ -312,6 +330,24 @@ always @(posedge clk or negedge rst) begin
                                 default: r_ALUop = 4'b1111; // Undefined operation
                         endcase
                     end
+
+                    7'b0000011: begin //i-type load
+                        r_operand2 <= imm;
+                        r_operand1 <= i_reg_read_data2;
+                        r_mem_read <= 1'b1;
+                        r_mem_write <= 1'b0;
+
+                        r_ALUop = ADDI;  // ADDI (addition with immediate)
+                    end
+
+                    7'b0100011: begin //s-type store
+                        r_operand2 <= i_reg_read_data2;
+                        r_mem_read <= 1'b0;
+                        r_mem_write <= 1'b1;
+                        rd     <= i_reg_read_data1[4:0] + imm[4:0];
+                        
+                        r_ALUop = SW;  // ADDI (addition with immediate)
+                    end
                 endcase
             end
 
@@ -320,7 +356,9 @@ always @(posedge clk or negedge rst) begin
                 r_idex_ALUop <= r_ALUop;
                 r_idex_operand1 <= r_operand1;
                 r_idex_operand2 <= r_operand2;
-                r_decode_fin <= 1'b1;
+                r_idex_mem_read <= r_mem_read;
+                r_idex_mem_write <= r_mem_write;
+                r_idex_rd <= rd;
             end
         endcase
     end
@@ -355,6 +393,7 @@ end
 always @(posedge clk or negedge rst) begin 
     if (!rst) begin
         r_idex_reg_occupied <= 1'b0;
+
     end else begin
         case (curr_idex_state)
             IDLE_IDEX: begin
@@ -362,7 +401,7 @@ always @(posedge clk or negedge rst) begin
             end
             STORE_IDEX: begin //make flush a handshake signal
                 r_idex_reg_occupied <= 1'b1; // signal to the decoder that data is ready
-                r_decoded_ins_ready <= 0;
+
             end
         endcase
     end
@@ -384,9 +423,15 @@ end
 // ex_hold_rs2
 // ex_hold_funct7
 // ex_hold_imm
-
 assign o_flush = r_flush_sig;
-assign o_operand1 = r_operand1;
-assign o_operand2 = r_operand2;
-assign o_ALUop = r_ALUop;
+assign o_operand1 = r_idex_operand1;
+assign o_operand2 = r_idex_operand2;
+assign o_ALUop = r_idex_ALUop;
+assign o_dec_ins_ready = r_idex_reg_occupied;
+assign o_mem_read = r_idex_mem_read;
+assign o_mem_write = r_idex_mem_write;
+assign o_rd = r_idex_rd;
+assign r_decode_fin = (curr_dec_state == PASS);
+assign r_decoded_ins_ready = (curr_dec_state == DECODE);
+assign o_debug_flag = r_idex_rd;
 endmodule

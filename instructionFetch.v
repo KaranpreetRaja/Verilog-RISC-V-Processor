@@ -6,47 +6,61 @@ module instructionFetch (
     input [31:0] i_load_instruction,
     input i_flush,
     output o_data_ready,
-    output [31:0] o_instruction
+    output [31:0] o_instruction,
+    output o_debug_flag
 );
 // start with program memory
 
 reg [31:0] memory [0:7]; // go back and find out how to initialize this all to zeroes
-reg [2:0] r_write_enable;
+reg [2:0] r_write_enable = 0;
 reg [2:0] r_avail_instructions = 3'b0; // total number of available instructions
 reg [2:0] r_program_counter = 3'b0;
-reg [31:0] r_load_instruction;
+reg [31:0] r_load_instruction = 0;
 reg r_if_reg_occupied = 0; //check to see if IF reg is occupied
-reg [31:0] r_fetch_reg; //hold fetched instruction
-reg [31:0] r_if_next_val; //hold onto next if reg val until IF is ready to hold, will pause all fetches until then
+reg [31:0] r_fetch_reg = 0; //hold fetched instruction
+reg [31:0] r_if_next_val = 0; //hold onto next if reg val until IF is ready to hold, will pause all fetches until then
 reg r_incr_pc = 0;
-reg [1:0] r_incr_pc_delay;
-reg r_fetch_ready; // data ready to be passed to ID
-reg [31:0] r_if_reg;
+reg [1:0] r_incr_pc_delay = 0;
+reg r_fetch_ready = 0; // data ready to be passed to ID
+reg [31:0] r_if_reg = 0;
 reg [1:0] r_fetch_ready_delay = 2'b0;
 reg r_enable_pc = 1'b0;
 reg DEBUG_FLAG = 0;
-reg [1:0] r_if_reg_occupied_delay;
+reg [1:0] r_if_reg_occupied_delay = 0;
 reg [2:0] r_prev_prog_counter = 3'b0;
 reg r_enable_fetch = 1'b1;
-reg r_is_fetch_enabled;
+reg r_is_fetch_enabled = 0;
+reg [1:0] r_flush_delay;
 // PROGRAM MEMORY LOGIC //
 parameter IDLE_IM = 2'b00, 
           RECEIVE = 2'b01;
 
 reg [1:0] curr_load_state, next_load_state;
 
+initial begin
+    memory[0] = 0;
+    memory[1] = 0;
+    memory[2] = 0;
+    memory[3] = 0;
+    memory[4] = 0;
+    memory[5] = 0;
+    memory[6] = 0;
+    memory[7] = 0;
+end
 always @(posedge clk or negedge rst) begin
     if (!rst) begin
         r_write_enable <= 2'b0;
         r_incr_pc_delay <= 2'b0;
         r_fetch_ready_delay <= 2'b0;
         r_if_reg_occupied_delay <= 2'b00;
+        r_flush_delay <= 2'b0;
     end
     else begin
         r_write_enable <= {r_write_enable[0], i_write_enable};
         r_incr_pc_delay <= {r_incr_pc_delay[0], r_incr_pc};
         r_fetch_ready_delay <= {r_fetch_ready_delay[0], r_fetch_ready};
         r_if_reg_occupied_delay <= {r_if_reg_occupied_delay[0], r_if_reg_occupied};
+        r_flush_delay <= {r_flush_delay[0], i_flush};
     end
 end
 
@@ -117,7 +131,8 @@ end
 always @(posedge clk or negedge rst) begin
     if (!rst) begin
         r_program_counter <= 3'b0;
-        r_enable_fetch <= 1'b1;
+        r_enable_pc <= 1'b1;
+        DEBUG_FLAG <= 0;
     end else begin
         case (curr_pc_state)
             IDLE_PC: begin
@@ -126,8 +141,8 @@ always @(posedge clk or negedge rst) begin
             INCR: begin
                 if (r_enable_pc == 1'b1) begin
                     r_program_counter <= r_program_counter + 1'b1;
-                    r_enable_fetch <= 1'b1; //toggle high
                     r_enable_pc <= 1'b0;
+                    DEBUG_FLAG <= ~DEBUG_FLAG;
                 end
             end
         endcase
@@ -153,6 +168,22 @@ always @(posedge clk or negedge rst) begin
         r_if_reg_occupied_pulse <= 1'b0;
     end else begin
         r_if_reg_occupied_pulse <= r_fetch_ready && !r_if_reg_occupied;
+    end
+end
+
+
+always @(posedge clk or negedge rst) begin
+    if (!rst) begin
+        r_enable_fetch <= 1'b1; // Default enable fetch on reset
+    end else begin
+        // Disable fetch during a flush or if fetch is in progress
+        if (i_flush || (curr_fetch_state == FETCH)) begin
+            r_enable_fetch <= 1'b0;
+        end 
+        // Re-enable fetch after PASS state or fetch completion
+        else if (curr_fetch_state == PASS) begin
+            r_enable_fetch <= 1'b1;
+        end
     end
 end
 
@@ -198,8 +229,6 @@ always @(posedge clk or negedge rst) begin
         FETCH: begin
             r_fetch_reg <= memory[r_program_counter];
             r_fetch_ready <= 1'b1;
-            DEBUG_FLAG <=1'b1;
-            r_enable_fetch <= 1'b0;
         end
 
         PASS: begin
@@ -231,6 +260,7 @@ always @(*) begin
         STORE: begin
             if (i_flush == 1'b1) next_if_state = IDLE_IF_ID; //if ID in decoder module raises high signal
             // hold onto r_if_reg value til then
+            // flush coming all the way from controlUnit
         end
     endcase
 end
@@ -254,5 +284,6 @@ end
 
 assign o_data_ready = r_if_reg_occupied;
 assign o_instruction = r_if_reg;
+assign o_debug_flag = DEBUG_FLAG;
 // CURRENT PROBLEM -> if flush occurs while fetch is in fetch state, not good because
 endmodule
